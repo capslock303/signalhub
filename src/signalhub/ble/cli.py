@@ -358,7 +358,7 @@ def export_review_db(ctx: click.Context, out: Path) -> None:
 @main.group("review")
 @click.pass_context
 def review_cli(ctx: click.Context) -> None:
-    """Streamlit dashboard: tables, assessment markdown, optional AI (pip install 'signalhub[review]')."""
+    """Streamlit dashboard: tables, assessment markdown, optional AI (streamlit is a core dependency)."""
     del ctx
 
 
@@ -379,7 +379,7 @@ def review_serve(ctx: click.Context, db_path: Path | None, port: int) -> None:
         import streamlit  # noqa: F401
     except ImportError as e:
         raise click.ClickException(
-            "Streamlit is not installed. Use: pip install 'signalhub[review]'",
+            "Streamlit is not installed. Use: pip install -e .",
         ) from e
     import subprocess
     import sys

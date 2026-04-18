@@ -184,7 +184,7 @@ The dashboard is `src/signalhub/review/app.py`. Deploy from a **GitHub** repo th
 2. **App settings**
    - **Main file:** `streamlit_app.py` (repository root — calls `main()` explicitly; avoids a blank app when Cloud does not run `if __name__ == "__main__"` on a nested path).
    - **Python version:** in **Advanced settings** when you first deploy, choose **3.10–3.12** (matches `requires-python` in `pyproject.toml`). The Cloud UI controls this; a `runtime.txt` file is not used for version selection.
-   - **Dependencies:** root `requirements.txt` (`streamlit`, `click`, build tools, and this package via `.`)
+   - **Dependencies:** a single **`pyproject.toml`** only (Streamlit installs this package with `streamlit` and `click` as runtime deps). Avoid also committing a root `requirements.txt`, or the host may warn about multiple dependency files and pick the wrong one.
 3. **Database:** Cloud instances have **no persistent path** to your Pi/PC SQLite file. Use the sidebar **Upload .sqlite** (e.g. a file from `signalhub-ble export review-db --out …`) each session, or attach [persistent storage](https://docs.streamlit.io/streamlit-community-cloud/manage-your-app#persistent-storage) if your plan supports it.
 4. **Secrets (optional):** Streamlit Cloud → your app → **Settings → Secrets** — paste TOML (encrypted at rest). See committed **`secrets.example.toml`** in this repo for all keys the dashboard understands. Minimum for the **AI** tab:
 
@@ -193,6 +193,14 @@ The dashboard is `src/signalhub/review/app.py`. Deploy from a **GitHub** repo th
    ```
 
    You can use `SIGNALHUB_OPENAI_API_KEY` instead of `OPENAI_API_KEY` if you prefer. Optional: `SIGNALHUB_OPENAI_BASE_URL`, `SIGNALHUB_AI_MODEL`. Changes can take **~1 minute** to reach the running app (reboot if needed).
+
+### If deploy logs say “Updating the app files has failed” (git exit 1)
+
+That comes from Streamlit’s runner failing to `git pull` your repo, not from Python deps. Try in order:
+
+1. **GitHub → Settings → Applications** — ensure **Streamlit** still has access to `capslock303/signalhub` (re-authorize if needed).
+2. In Streamlit **Manage app** → **Reboot** (or **Redeploy** from the latest `main`).
+3. If it persists, **delete the Cloud app** and **deploy again** from the same repo/branch (clears a broken workspace). Your URL may change unless you reuse the app name.
 
 ### Publish this folder to GitHub (`capslock303/signalhub`)
 

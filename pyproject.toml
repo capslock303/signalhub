@@ -10,11 +10,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "click>=8.1",
+  "streamlit>=1.28",
 ]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.4"]
-review = ["streamlit>=1.28"]
+# Backward compatible no-op (streamlit is already a core dependency):
+review = []
 
 [project.scripts]
 signalhub-ble = "signalhub.ble.cli:main"
