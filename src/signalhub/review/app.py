@@ -546,5 +546,6 @@ def main() -> None:
         _tab_sql(conn)
 
 
+# Community Cloud: prefer repo-root ``streamlit_app.py`` as the Streamlit "Main file" (see README).
 if __name__ == "__main__":
     main()

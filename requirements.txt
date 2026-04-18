@@ -1,5 +1,6 @@
 # Streamlit Community Cloud: pip install -r requirements.txt
-# Installs this package (pyproject.toml) plus dashboard dependencies.
 streamlit>=1.28
 click>=8.1
+setuptools>=61
+wheel
 .

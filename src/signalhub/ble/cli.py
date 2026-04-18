@@ -387,8 +387,15 @@ def review_serve(ctx: click.Context, db_path: Path | None, port: int) -> None:
     import signalhub.review as review_pkg
 
     app_py = Path(review_pkg.__file__).resolve().parent / "app.py"
+    repo_root = app_py.resolve().parents[3]
+    entry = repo_root / "streamlit_app.py"
+    if entry.is_file():
+        streamlit_target = entry
+    else:
+        streamlit_target = app_py
     env = {**os.environ, "SIGNALHUB_REVIEW_DB": str(resolved)}
     click.echo(f"Dashboard database: {resolved}")
+    click.echo(f"Streamlit script: {streamlit_target}")
     raise SystemExit(
         subprocess.call(
             [
@@ -396,7 +403,7 @@ def review_serve(ctx: click.Context, db_path: Path | None, port: int) -> None:
                 "-m",
                 "streamlit",
                 "run",
-                str(app_py),
+                str(streamlit_target),
                 "--server.port",
                 str(port),
             ],

@@ -182,9 +182,9 @@ The dashboard is `src/signalhub/review/app.py`. Deploy from a **GitHub** repo th
 
 1. **Connect GitHub in the Streamlit UI** — Community Cloud does *not* use a `GITHUB_TOKEN` from your `.env`; you authorize the app in the browser. Keep **tokens out of the repo** (`.env` is gitignored).
 2. **App settings**
-   - **Main file:** `src/signalhub/review/app.py`
-   - **Python version:** 3.10+ (3.11 is fine)
-   - **Dependencies:** `requirements.txt` at the repo root (`streamlit`, `click`, and this package via `.`)
+   - **Main file:** `streamlit_app.py` (repository root — calls `main()` explicitly; avoids a blank app when Cloud does not run `if __name__ == "__main__"` on a nested path).
+   - **Python version:** in **Advanced settings** when you first deploy, choose **3.10–3.12** (matches `requires-python` in `pyproject.toml`). The Cloud UI controls this; a `runtime.txt` file is not used for version selection.
+   - **Dependencies:** root `requirements.txt` (`streamlit`, `click`, build tools, and this package via `.`)
 3. **Database:** Cloud instances have **no persistent path** to your Pi/PC SQLite file. Use the sidebar **Upload .sqlite** (e.g. a file from `signalhub-ble export review-db --out …`) each session, or attach [persistent storage](https://docs.streamlit.io/streamlit-community-cloud/manage-your-app#persistent-storage) if your plan supports it.
 4. **AI tab (optional):** in the app **Secrets** editor, add for example:
 
