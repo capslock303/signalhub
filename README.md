@@ -14,6 +14,20 @@ cd signalhub
 pip install -e .
 ```
 
+### Run everything from a parent folder (e.g. `nRF/signalhub` inside `nRF`)
+
+If `signalhub` lives next to your **`data/`** and **`.env`**, stay in the **parent** directory and use:
+
+| Goal | Command (PowerShell) |
+|------|----------------------|
+| One-time install | `pwsh -File .\signalhub\scripts\dev\setup-editable.ps1` (from parent) or `.\setup-local.ps1` from inside `signalhub` |
+| Streamlit dashboard | `pwsh -File .\signalhub\scripts\dev\run-dashboard.ps1` or `.\signalhub\run-dashboard.ps1` |
+| CLI | `pwsh -File .\signalhub\scripts\dev\signalhub-ble.ps1 -- init-db` (etc.) |
+
+If your workspace root is the **parent** of `signalhub`, copy **`examples/workspace-root-windows/*.ps1`** from this repo into that root (or run them from that folder). They forward to **`scripts/dev/`** so **`./data`**, **`./.env`**, and the default DB path resolve next to your project, not inside `signalhub/`.
+
+Default DB path is **`./data/db/signalhub.sqlite`** relative to the **current working directory**; the dev scripts set cwd to the parent of `signalhub` so data and `.env` stay at workspace root.
+
 ## Quick start
 
 ```bash
