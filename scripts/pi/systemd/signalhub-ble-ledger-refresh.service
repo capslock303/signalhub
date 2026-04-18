@@ -1,0 +1,13 @@
+[Unit]
+Description=Signalhub BLE ledger rebuild + classify
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=kpi
+Group=kpi
+WorkingDirectory=/home/kpi/ble
+Environment=SIGNALHUB_BLE_ROOT=/home/kpi/ble
+Environment=SIGNALHUB_DATA_DIR=/home/kpi/ble/data
+Environment=SIGNALHUB_DB=/home/kpi/ble/data/db/signalhub.sqlite
+ExecStart=/bin/bash /home/kpi/ble/signalhub/scripts/pi/ledger_refresh.sh

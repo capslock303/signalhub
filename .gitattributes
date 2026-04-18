@@ -1,0 +1,2 @@
+# Shell on the Pi must stay LF (CRLF breaks `set -o pipefail` / shebang handling).
+*.sh text eol=lf

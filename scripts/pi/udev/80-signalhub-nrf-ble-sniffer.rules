@@ -1,0 +1,8 @@
+# Nordic nRF Sniffer for Bluetooth LE — USB IDs from lsusb (1915:522a)
+# Start/stop the Signalhub capture + import stack when the dongle appears or leaves.
+
+ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyACM*", ATTRS{idVendor}=="1915", ATTRS{idProduct}=="522a", \
+  RUN+="/usr/bin/systemctl start signalhub-ble.target"
+
+ACTION=="remove", SUBSYSTEM=="usb", ATTR{idVendor}=="1915", ATTR{idProduct}=="522a", \
+  RUN+="/usr/bin/systemctl stop signalhub-ble.target"

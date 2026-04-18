@@ -1,0 +1,4 @@
+[Unit]
+Description=Signalhub BLE platform (capture + import when Nordic sniffer is present)
+Documentation=file:///home/kpi/ble/signalhub/README.md
+Wants=signalhub-ble-collector.service signalhub-ble-importer.service

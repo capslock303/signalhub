@@ -1,0 +1,22 @@
+[Unit]
+Description=Signalhub BLE import + session summarize loop
+PartOf=signalhub-ble.target
+After=signalhub-ble-collector.service
+
+[Service]
+Type=simple
+User=kpi
+Group=kpi
+WorkingDirectory=/home/kpi/ble
+Environment=SIGNALHUB_BLE_ROOT=/home/kpi/ble
+Environment=SIGNALHUB_DATA_DIR=/home/kpi/ble/data
+Environment=SIGNALHUB_DB=/home/kpi/ble/data/db/signalhub.sqlite
+Environment=SIGNALHUB_SENSOR_ID=NRF52840-SNIFFER
+Environment=SIGNALHUB_IMPORT_POLL_SEC=25
+Environment=SIGNALHUB_IMPORT_STABLE_SEC=3
+ExecStart=/bin/bash /home/kpi/ble/signalhub/scripts/pi/import_loop.sh
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=signalhub-ble.target

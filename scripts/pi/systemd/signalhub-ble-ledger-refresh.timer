@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic Signalhub ledger refresh
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

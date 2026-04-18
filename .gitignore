@@ -1,0 +1,37 @@
+# Pi deploy keys are machine-local; keep only README.md in git under this folder.
+.ssh.pi-deploy/*
+!.ssh.pi-deploy/README.md
+
+# Local secrets (e.g. OPENAI_API_KEY, GITHUB_TOKEN)
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Python / build
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.python-version
+
+# Local data (keep DB and exports off GitHub)
+data/
+*.sqlite
+*.sqlite3
+
+# Fetched Pi / local assessment artifacts (optional)
+assessment-from-pi*
+*-pi-data-*.csv
+*-pi-table-*.csv
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
