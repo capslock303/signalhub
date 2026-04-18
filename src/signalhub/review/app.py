@@ -59,7 +59,12 @@ def _sidebar_db_path() -> tuple[Path, bool] | None:
 
     env_review = os.environ.get("SIGNALHUB_REVIEW_DB", "").strip()
     env_main = os.environ.get("SIGNALHUB_DB", "").strip()
-    default_p = env_review or env_main or str(default_db_path())
+    candidate = env_review or env_main or str(default_db_path())
+    path_default = ""
+    if candidate.strip():
+        cand_path = Path(candidate).expanduser()
+        if cand_path.is_file():
+            path_default = str(cand_path.resolve())
     readonly = st.sidebar.checkbox(
         "Open read-only",
         value=False,
@@ -67,8 +72,8 @@ def _sidebar_db_path() -> tuple[Path, bool] | None:
     )
     path_in = st.sidebar.text_input(
         "SQLite path (local / server filesystem)",
-        value=default_p,
-        help="Main DB or `export review-db` copy. On Community Cloud this path is usually empty unless you mount storage.",
+        value=path_default,
+        help="Leave empty on Streamlit Cloud and upload a file above, or set SIGNALHUB_DB in Secrets only if that path exists on the server.",
     )
     if st.sidebar.button("Clear connection cache"):
         get_connection.clear()
