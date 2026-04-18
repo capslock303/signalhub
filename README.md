@@ -186,13 +186,13 @@ The dashboard is `src/signalhub/review/app.py`. Deploy from a **GitHub** repo th
    - **Python version:** in **Advanced settings** when you first deploy, choose **3.10–3.12** (matches `requires-python` in `pyproject.toml`). The Cloud UI controls this; a `runtime.txt` file is not used for version selection.
    - **Dependencies:** root `requirements.txt` (`streamlit`, `click`, build tools, and this package via `.`)
 3. **Database:** Cloud instances have **no persistent path** to your Pi/PC SQLite file. Use the sidebar **Upload .sqlite** (e.g. a file from `signalhub-ble export review-db --out …`) each session, or attach [persistent storage](https://docs.streamlit.io/streamlit-community-cloud/manage-your-app#persistent-storage) if your plan supports it.
-4. **AI tab (optional):** in the app **Secrets** editor, add for example:
+4. **Secrets (optional):** Streamlit Cloud → your app → **Settings → Secrets** — paste TOML (encrypted at rest). See committed **`secrets.example.toml`** in this repo for all keys the dashboard understands. Minimum for the **AI** tab:
 
    ```toml
    OPENAI_API_KEY = "sk-..."
-   # optional:
-   # SIGNALHUB_OPENAI_BASE_URL = "https://api.openai.com/v1"
    ```
+
+   You can use `SIGNALHUB_OPENAI_API_KEY` instead of `OPENAI_API_KEY` if you prefer. Optional: `SIGNALHUB_OPENAI_BASE_URL`, `SIGNALHUB_AI_MODEL`. Changes can take **~1 minute** to reach the running app (reboot if needed).
 
 ### Publish this folder to GitHub (`capslock303/signalhub`)
 
