@@ -15,11 +15,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff>=0.4"]
+# setuptools 81+ drops top-level pkg_resources; PyInstaller's altgraph still imports it.
+desktop = ["pyinstaller>=6.0", "setuptools>=69,<81"]
 # Backward compatible no-op (streamlit is already a core dependency):
 review = []
 
 [project.scripts]
 signalhub-ble = "signalhub.ble.cli:main"
+signalhub-desktop = "signalhub.launcher.windows_desktop:main"
 
 [tool.setuptools.package-dir]
 "" = "src"

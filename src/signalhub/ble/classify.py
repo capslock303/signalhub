@@ -33,7 +33,12 @@ def classify_from_rollup(rollup: SessionAddressRollup) -> tuple[str, str, str, s
     else:
         device = "unknown"
 
-    has_identity = bool(rollup.name_hints or rollup.manufacturer_hints or rollup.service_hints)
+    has_identity = bool(
+        rollup.name_hints
+        or rollup.manufacturer_hints
+        or rollup.service_hints
+        or rollup.uuid128_hints
+    )
     if has_identity and rollup.packet_count >= 5:
         confidence = "high"
     elif rollup.packet_count >= 15 or (has_identity and rollup.packet_count >= 3):

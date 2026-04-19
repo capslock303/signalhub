@@ -20,11 +20,17 @@ DEFAULT_FIELDS: tuple[str, ...] = (
     "frame.protocols",
     "btle.advertising_address",
     "btle.scanning_address",
+    "btle.advertising_address_type",
     "btle.advertising_header.pdu_type",
     "nordic_ble.rssi",
+    "btle.rssi",
     "btcommon.eir_ad.entry.device_name",
     "btcommon.eir_ad.entry.company_id",
     "btcommon.eir_ad.entry.uuid_16",
+    "btcommon.eir_ad.entry.uuid_128",
+    "btcommon.eir_ad.entry.appearance",
+    "btcommon.eir_ad.entry.flags",
+    "btcommon.eir_ad.entry.tx_power",
 )
 
 

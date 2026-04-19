@@ -132,10 +132,44 @@ def row_from_tshark_dict(d: dict[str, str]) -> ObservationRow | None:
             "btcommon.eir.uuid_16",
         )
         or None,
+        uuid128=col_any(
+            "btcommon.eir_ad.entry.uuid_128",
+            "btcommon.eir.uuid_128",
+        )
+        or None,
+        appearance=col_any(
+            "btcommon.eir_ad.entry.appearance",
+            "btcommon.eir.appearance",
+        )
+        or None,
+        adv_flags_hex=col_any(
+            "btcommon.eir_ad.entry.flags",
+            "btcommon.eir.flags",
+        )
+        or None,
+        tx_power_dbm=_parse_tx_power_dbm(
+            col_any(
+                "btcommon.eir_ad.entry.tx_power",
+                "btcommon.eir.tx_power",
+            ),
+        ),
         encrypted_flag=None,
         address_type=addr_type,
         extras=extras,
     )
+
+
+def _parse_tx_power_dbm(raw: str) -> float | None:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        try:
+            return float(int(s, 0))
+        except ValueError:
+            return None
 
 
 def observation_flags(row: ObservationRow) -> dict[str, Any]:

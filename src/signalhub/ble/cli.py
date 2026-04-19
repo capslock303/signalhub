@@ -9,13 +9,18 @@ import click
 
 from signalhub import __version__
 from signalhub.ble import assessment_enrichment, ingest, reports
+from signalhub.ble.decrypt_workflow import (
+    set_session_secrets_path,
+    suggest_tshark_decrypt_command,
+    wireshark_decrypt_instructions,
+)
 from signalhub.ble.ledger import apply_classify_to_ledger, rebuild_ledger, summarize_session
 from signalhub.review.build import build_review_database
 from signalhub.common.logging import configure_logging
 from signalhub.common.csv_export import row_dict_for_csv
 from signalhub.config import db_path as default_db_path, load_dotenv_files
 from signalhub.common.timeutil import utc_today_iso
-from signalhub.db.sqlite import connect, init_db
+from signalhub.db.sqlite import connect, init_db, now_epoch
 
 
 def _write_csv_rows(out: Path, rows: list) -> None:
@@ -125,6 +130,44 @@ def sensor_add(ctx: click.Context, sensor_id: str, sensor_type: str, model: str,
     click.echo(f"Registered sensor {sensor_id}")
 
 
+@sensor_cli.command("position-set")
+@click.option("--id", "sensor_id", required=True)
+@click.option("--x", type=float, required=True)
+@click.option("--y", type=float, required=True)
+@click.option("--z", type=float, default=None)
+@click.option("--site", default="default", show_default=True)
+@click.pass_context
+def sensor_position_set(
+    ctx: click.Context,
+    sensor_id: str,
+    x: float,
+    y: float,
+    z: float | None,
+    site: str,
+) -> None:
+    """Store approximate 3D coordinates for a sensor (used for RSSI centroid estimates in insights)."""
+    conn = _conn(ctx)
+    init_db(conn)
+    row = conn.execute("SELECT 1 FROM sensors WHERE sensor_id = ?", (sensor_id,)).fetchone()
+    if not row:
+        raise click.ClickException(f"Unknown sensor {sensor_id!r}; run sensor add first.")
+    conn.execute(
+        """
+        INSERT INTO sensor_positions(sensor_id, x_m, y_m, z_m, site_label, updated_at)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT(sensor_id) DO UPDATE SET
+          x_m = excluded.x_m,
+          y_m = excluded.y_m,
+          z_m = excluded.z_m,
+          site_label = excluded.site_label,
+          updated_at = excluded.updated_at
+        """,
+        (sensor_id, x, y, z, site or None, now_epoch()),
+    )
+    conn.commit()
+    click.echo(f"Saved position for {sensor_id} ({x}, {y}, {z}) site={site!r}")
+
+
 @main.command("import")
 @click.option("--pcap", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
 @click.option("--sensor", "sensor_id", required=True)
@@ -195,13 +238,93 @@ def ledger_cli(ctx: click.Context) -> None:
 
 
 @ledger_cli.command("rebuild")
+@click.option(
+    "--fingerprint",
+    "fingerprint_profile",
+    type=click.Choice(["v1", "v2"]),
+    default="v1",
+    show_default=True,
+    help="v2 folds sorted UUID-128 hints into fingerprint hash (different clusters vs v1).",
+)
 @click.pass_context
-def ledger_rebuild_cmd(ctx: click.Context) -> None:
+def ledger_rebuild_cmd(ctx: click.Context, fingerprint_profile: str) -> None:
     """Rebuild ble_devices from session summaries + observations."""
     conn = _conn(ctx)
     init_db(conn)
-    n = rebuild_ledger(conn)
-    click.echo(f"Rebuilt ledger with {n} devices")
+    n = rebuild_ledger(conn, fingerprint_profile=fingerprint_profile)
+    click.echo(f"Rebuilt ledger with {n} devices (fingerprint_profile={fingerprint_profile})")
+
+
+@main.group("crypto")
+@click.pass_context
+def crypto_cli(ctx: click.Context) -> None:
+    """BLE decryption metadata and operator helpers."""
+    del ctx
+
+
+@crypto_cli.command("status")
+@click.option("--session", "session_id", required=True)
+@click.pass_context
+def crypto_status(ctx: click.Context, session_id: str) -> None:
+    """Show ble_session_crypto row and encrypted packet count for a session."""
+    conn = _conn(ctx)
+    init_db(conn)
+    upsert = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ble_session_crypto'",
+    ).fetchone()
+    if not upsert or upsert[0] == 0:
+        click.echo("ble_session_crypto table missing — run init-db.")
+        return
+    row = conn.execute(
+        "SELECT * FROM ble_session_crypto WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if not row:
+        click.echo("No crypto row yet; import a capture or run: signalhub-ble crypto refresh --session …")
+        return
+    click.echo(dict(row))
+
+
+@crypto_cli.command("refresh")
+@click.option("--session", "session_id", required=True)
+@click.pass_context
+def crypto_refresh(ctx: click.Context, session_id: str) -> None:
+    """Recompute encrypted packet counts for a session."""
+    from signalhub.ble.decrypt_workflow import upsert_session_crypto_from_observations
+
+    conn = _conn(ctx)
+    init_db(conn)
+    upsert_session_crypto_from_observations(conn, session_id)
+    click.echo("Updated ble_session_crypto.")
+
+
+@crypto_cli.command("set-secrets")
+@click.option("--session", "session_id", required=True)
+@click.option("--file", "secrets_file", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.pass_context
+def crypto_set_secrets(ctx: click.Context, session_id: str, secrets_file: Path) -> None:
+    """Record a Wireshark/tshark Bluetooth keys file path for operator workflows."""
+    conn = _conn(ctx)
+    init_db(conn)
+    set_session_secrets_path(conn, session_id, secrets_file)
+    click.echo(f"Stored secrets path for session {session_id}")
+
+
+@crypto_cli.command("suggest-decrypt")
+@click.option("--pcap", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--out", type=click.Path(dir_okay=False, path_type=Path), required=True)
+@click.option("--keys", "keys_file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.pass_context
+def crypto_suggest_decrypt(
+    ctx: click.Context,
+    pcap: Path,
+    out: Path,
+    keys_file: Path | None,
+) -> None:
+    """Print a tshark starter command + Wireshark GUI decrypt notes."""
+    del ctx
+    click.echo(suggest_tshark_decrypt_command(pcap, out, keys_file))
+    click.echo(wireshark_decrypt_instructions())
 
 
 @main.command("classify")
@@ -451,6 +574,68 @@ def report_change(ctx: click.Context, from_date: str, to_date: str, out: Path) -
     conn = _conn(ctx)
     init_db(conn)
     text = reports.render_change_report(conn, from_date, to_date)
+    reports.write_text(out, text)
+    click.echo(f"Wrote {out}")
+
+
+@report_cli.command("insights")
+@click.option("--from", "from_date", required=True, help="UTC date YYYY-MM-DD (inclusive).")
+@click.option(
+    "--to",
+    "to_date",
+    required=False,
+    default=None,
+    help="UTC date YYYY-MM-DD (inclusive). Default: today (UTC).",
+)
+@click.option(
+    "--baseline-from",
+    "baseline_from",
+    default=None,
+    help="Optional second window start (UTC) for capture-health comparison.",
+)
+@click.option(
+    "--baseline-to",
+    "baseline_to",
+    default=None,
+    help="Optional second window end (UTC) for capture-health comparison.",
+)
+@click.option(
+    "--no-materialize",
+    "no_materialize",
+    is_flag=True,
+    default=False,
+    help="Do not INSERT into ble_device_window_stats; use inline SQL only.",
+)
+@click.option("--out", type=click.Path(dir_okay=False, path_type=Path), required=True)
+@click.pass_context
+def report_insights(
+    ctx: click.Context,
+    from_date: str,
+    to_date: str | None,
+    baseline_from: str | None,
+    baseline_to: str | None,
+    no_materialize: bool,
+    out: Path,
+) -> None:
+    """Consolidated insights markdown (capture health, recurrence, SIG hints, ledger narrative)."""
+    if to_date is None or str(to_date).strip().lower() == "today":
+        to_date = utc_today_iso()
+    else:
+        to_date = str(to_date).strip()
+    conn = _conn(ctx)
+    init_db(conn)
+    bf = baseline_from.strip() if baseline_from else None
+    bt = baseline_to.strip() if baseline_to else None
+    if (bf or bt) and not (bf and bt):
+        raise click.UsageError("Pass both --baseline-from and --baseline-to, or neither.")
+    text = reports.render_insights_report(
+        conn,
+        from_date,
+        to_date,
+        materialize_window_stats=not no_materialize,
+        baseline_from_date=bf,
+        baseline_to_date=bt,
+    )
     reports.write_text(out, text)
     click.echo(f"Wrote {out}")
 

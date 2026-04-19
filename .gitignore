@@ -17,7 +17,9 @@ __pycache__/
 dist/
 build/
 .venv/
+.venv-desktop-build/
 venv/
+SignalhubDashboard.spec
 .python-version
 
 # Local data (keep DB and exports off GitHub)

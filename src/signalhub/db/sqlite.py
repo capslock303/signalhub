@@ -25,6 +25,41 @@ def init_db(conn: sqlite3.Connection) -> None:
     cols = _table_columns(conn, "ble_devices")
     if "identity_kind" not in cols:
         conn.execute("ALTER TABLE ble_devices ADD COLUMN identity_kind TEXT DEFAULT 'mac'")
+    obs_cols = _table_columns(conn, "ble_observations")
+    for col, typ in (
+        ("appearance_hint", "TEXT"),
+        ("tx_power_dbm", "REAL"),
+        ("adv_flags_hex", "TEXT"),
+        ("service_uuid128_hint", "TEXT"),
+    ):
+        if col not in obs_cols:
+            conn.execute(f"ALTER TABLE ble_observations ADD COLUMN {col} {typ}")
+    dss_cols = _table_columns(conn, "ble_device_session_summary")
+    if "adv_profile_json" not in dss_cols:
+        conn.execute("ALTER TABLE ble_device_session_summary ADD COLUMN adv_profile_json TEXT")
+    if "fingerprint_profile" not in cols:
+        conn.execute(
+            "ALTER TABLE ble_devices ADD COLUMN fingerprint_profile TEXT NOT NULL DEFAULT 'v1'",
+        )
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS sensor_positions (
+          sensor_id TEXT PRIMARY KEY REFERENCES sensors(sensor_id),
+          x_m REAL NOT NULL,
+          y_m REAL NOT NULL,
+          z_m REAL,
+          site_label TEXT,
+          updated_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ble_session_crypto (
+          session_id TEXT PRIMARY KEY REFERENCES capture_sessions(session_id),
+          secrets_file_path TEXT,
+          encrypted_packets_observed INTEGER NOT NULL DEFAULT 0,
+          decrypt_attempted INTEGER NOT NULL DEFAULT 0,
+          decrypt_last_message TEXT
+        );
+        """,
+    )
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(SCHEMA_VERSION),),

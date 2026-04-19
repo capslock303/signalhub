@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 5
 
 DDL = """
 PRAGMA foreign_keys = ON;
@@ -45,7 +45,11 @@ CREATE TABLE IF NOT EXISTS ble_observations (
   smp_seen INTEGER NOT NULL DEFAULT 0,
   encrypted_seen INTEGER NOT NULL DEFAULT 0,
   frame_protocols TEXT,
-  raw_ref TEXT
+  raw_ref TEXT,
+  appearance_hint TEXT,
+  tx_power_dbm REAL,
+  adv_flags_hex TEXT,
+  service_uuid128_hint TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ble_obs_session ON ble_observations(session_id);
@@ -77,7 +81,8 @@ CREATE TABLE IF NOT EXISTS ble_devices (
   appearance_pattern TEXT,
   probable_device_class TEXT,
   confidence TEXT,
-  notes TEXT
+  notes TEXT,
+  fingerprint_profile TEXT NOT NULL DEFAULT 'v1'
 );
 
 CREATE TABLE IF NOT EXISTS ble_device_session_summary (
@@ -96,6 +101,7 @@ CREATE TABLE IF NOT EXISTS ble_device_session_summary (
   encrypted_seen INTEGER NOT NULL DEFAULT 0,
   appearance_pattern TEXT,
   packet_count INTEGER,
+  adv_profile_json TEXT,
   UNIQUE(session_id, address)
 );
 
@@ -112,4 +118,39 @@ CREATE TABLE IF NOT EXISTS ble_aliases (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ble_aliases_ledger ON ble_aliases(ledger_id);
+
+CREATE TABLE IF NOT EXISTS ble_device_window_stats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  utc_from TEXT NOT NULL,
+  utc_to TEXT NOT NULL,
+  address TEXT NOT NULL,
+  ledger_id TEXT,
+  obs_rows INTEGER NOT NULL,
+  distinct_sessions INTEGER NOT NULL,
+  distinct_utc_hours INTEGER NOT NULL,
+  first_ts REAL,
+  last_ts REAL,
+  span_seconds REAL,
+  avg_inter_obs_seconds REAL,
+  UNIQUE(utc_from, utc_to, address)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ble_winstat_window ON ble_device_window_stats(utc_from, utc_to);
+
+CREATE TABLE IF NOT EXISTS sensor_positions (
+  sensor_id TEXT PRIMARY KEY REFERENCES sensors(sensor_id),
+  x_m REAL NOT NULL,
+  y_m REAL NOT NULL,
+  z_m REAL,
+  site_label TEXT,
+  updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ble_session_crypto (
+  session_id TEXT PRIMARY KEY REFERENCES capture_sessions(session_id),
+  secrets_file_path TEXT,
+  encrypted_packets_observed INTEGER NOT NULL DEFAULT 0,
+  decrypt_attempted INTEGER NOT NULL DEFAULT 0,
+  decrypt_last_message TEXT
+);
 """

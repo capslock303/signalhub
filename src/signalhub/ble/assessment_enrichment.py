@@ -45,6 +45,33 @@ def parse_previous_assessment(markdown: str) -> ParsedAssessment:
     return ParsedAssessment(r_from, r_to, sess, pkt, addr)
 
 
+def extract_insights_json_block(markdown: str) -> str | None:
+    """Return JSON inside `<!-- signalhub-insights-json ... -->` if present and valid."""
+    m = re.search(
+        r"<!--\s*signalhub-insights-json\s*(.*?)\s*-->",
+        markdown,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return None
+    raw = m.group(1).strip()
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return raw
+
+
+def strip_insights_json_block(markdown: str) -> str:
+    """Remove the hidden machine-metrics comment for human/LLM excerpts."""
+    return re.sub(
+        r"<!--\s*signalhub-insights-json\s*.*?\s*-->",
+        "",
+        markdown,
+        flags=re.DOTALL | re.IGNORECASE,
+    ).strip()
+
+
 def _global_db_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     t_now = now_epoch()
     since_24h = t_now - 86400.0
@@ -221,10 +248,15 @@ def fetch_openai_narrative(
                 {
                     "role": "system",
                     "content": (
-                        "You are a radio/BLE monitoring assistant. Be concise and factual. "
-                        "Use short bullet lists. Flag interesting changes, risks of false conclusions "
-                        "(e.g. same date window), and whether capture/import activity looks healthy. "
-                        "Do not invent numbers — only reference those in the user message."
+                        "You are a senior BLE/RF analyst. Do NOT summarize tables or repeat raw statistics "
+                        "that already appear in the user message. Instead: explain what the patterns likely mean "
+                        "for operators (venue vs transient devices, beacon vs connectable traffic, import health), "
+                        "call out uncertainty (MAC randomization, decode gaps, sparse captures), and give 4–7 concrete "
+                        "next actions (what to verify on the sniffer host, what longer capture window to try, "
+                        "which addresses deserve physical correlation). Use short bullets. Never invent counts—"
+                        "only reference numbers explicitly present in the user text. When JSON appears, treat it as "
+                        "structured facts (capture_health, baseline deltas, top device recurrence) — interpret, "
+                        "do not paste it back."
                     ),
                 },
                 {"role": "user", "content": user_prompt},
@@ -262,9 +294,44 @@ def build_ai_user_prompt(
     return (
         f"Assessment window: {from_date} to {to_date} (UTC inclusive days).\n\n"
         f"{baseline_summary}\n\n"
-        "Deterministic follow-up appendix (trust these numbers):\n"
-        f"{deterministic_appendix_excerpt}\n"
+        "Context (deterministic metrics — do not restate verbatim as a table; use them only to ground reasoning):\n"
+        f"{deterministic_appendix_excerpt}\n\n"
+        "Respond with: (1) What this environment probably looks like operationally, "
+        "(2) which risks of mis-read exist, (3) prioritized next steps for the analyst."
     )
+
+
+def build_insights_ai_user_prompt(
+    *,
+    from_date: str,
+    to_date: str,
+    insights_excerpt: str,
+    appendix_excerpt: str,
+    structured_metrics_json: str | None = None,
+) -> str:
+    """Prompt for interpretation after the consolidated insights markdown."""
+    parts = [
+        f"UTC window: {from_date} → {to_date}.",
+        "",
+        "### Consolidated insights (excerpt)",
+        insights_excerpt,
+        "",
+        "### Extra metrics (excerpt)",
+        appendix_excerpt,
+    ]
+    if structured_metrics_json:
+        parts += [
+            "",
+            "### Structured metrics (JSON — facts for reasoning, not for quoting verbatim)",
+            structured_metrics_json[:14000],
+        ]
+    parts += [
+        "",
+        "Task: interpret what this means for someone securing or auditing a BLE-rich site. "
+        "Avoid repeating markdown tables. Focus on implications, blind spots, baseline deltas vs capture-health "
+        "flags, recurrence patterns, and a short checklist of follow-ups.",
+    ]
+    return "\n".join(parts)
 
 
 def read_baseline(path: Path | None) -> str | None:

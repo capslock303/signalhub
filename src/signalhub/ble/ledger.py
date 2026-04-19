@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 from typing import Any
 
@@ -11,8 +12,9 @@ from signalhub.ble.classify import (
     refine_device_class_with_history,
 )
 from signalhub.ble.identity import stable_identity_key_and_kind
+from signalhub.db.sqlite import init_db
 from signalhub.ble.models import SessionAddressRollup
-from signalhub.ble.normalize import appearance_pattern, rollup_session
+from signalhub.ble.normalize import adv_profile_json_for_rollup, appearance_pattern, rollup_session
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +41,9 @@ def summarize_session(conn: sqlite3.Connection, session_id: str) -> int:
             INSERT INTO ble_device_session_summary(
               ledger_id, session_id, address, first_seen, last_seen,
               rssi_min, rssi_max, pdu_summary, connection_seen, gatt_seen,
-              smp_seen, encrypted_seen, appearance_pattern, packet_count
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              smp_seen, encrypted_seen, appearance_pattern, packet_count,
+              adv_profile_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 None,
@@ -57,6 +60,7 @@ def summarize_session(conn: sqlite3.Connection, session_id: str) -> int:
                 int(r.encrypted_seen),
                 pat,
                 r.packet_count,
+                adv_profile_json_for_rollup(r),
             ),
         )
         n += 1
@@ -117,6 +121,7 @@ def _merge_address_buckets(mac_list: list[str], buckets: list[dict[str, Any]]) -
         "recent_ts": None,
         "primary_mac": primary_mac,
         "all_macs": list(mac_list),
+        "u128_hints": set(),
     }
 
     rank = {"public": 3, "random": 2, "unknown": 1}
@@ -170,6 +175,7 @@ def _merge_address_buckets(mac_list: list[str], buckets: list[dict[str, Any]]) -
             if merged["svc_ts"] is None or (ts_s is not None and ts_s >= (merged["svc_ts"] or -1e100)):
                 merged["svc"] = b["svc"]
                 merged["svc_ts"] = ts_s
+        merged["u128_hints"].update(b.get("u128_hints") or set())
 
         last = b.get("recent_ts")
         if last is not None and (merged["recent_ts"] is None or last >= merged["recent_ts"]):
@@ -192,10 +198,15 @@ def _next_ledger_id(conn: sqlite3.Connection) -> str:
     return f"BLE-{best + 1:04d}"
 
 
-def rebuild_ledger(conn: sqlite3.Connection) -> int:
+def rebuild_ledger(conn: sqlite3.Connection, *, fingerprint_profile: str | None = None) -> int:
+    init_db(conn)
     conn.execute("DELETE FROM ble_aliases")
     conn.execute("DELETE FROM ble_devices")
     conn.execute("UPDATE ble_device_session_summary SET ledger_id = NULL")
+
+    fp = (fingerprint_profile or os.environ.get("SIGNALHUB_FINGERPRINT_PROFILE") or "v1").strip().lower()
+    if fp not in ("v1", "v2"):
+        fp = "v1"
 
     rows = list(conn.execute("SELECT * FROM ble_device_session_summary"))
     if not rows:
@@ -227,6 +238,7 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
                 "enc": False,
                 "recent_session": None,
                 "recent_ts": None,
+                "u128_hints": set(),
             }
         return by_addr[addr]
 
@@ -274,14 +286,14 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
 
         obs_hints = conn.execute(
             """
-            SELECT name_hint, manufacturer_hint, service_hint, timestamp
+            SELECT name_hint, manufacturer_hint, service_hint, service_uuid128_hint, timestamp
             FROM ble_observations
             WHERE session_id = ? AND address = ?
             ORDER BY observation_id
             """,
             (sid, addr),
         ).fetchall()
-        for name_hint, mfg, svc, ts in obs_hints:
+        for name_hint, mfg, svc, u128, ts in obs_hints:
             if name_hint:
                 if b["name_ts"] is None or (ts is not None and ts >= b["name_ts"]):
                     b["name"] = str(name_hint)
@@ -294,6 +306,8 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
                 if b["svc_ts"] is None or (ts is not None and ts >= b["svc_ts"]):
                     b["svc"] = str(svc)
                     b["svc_ts"] = ts
+            if u128 and str(u128).strip():
+                b["u128_hints"].add(str(u128).strip().lower())
 
         ot = conn.execute(
             """
@@ -318,6 +332,8 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
             name=b["name"],
             manufacturer=b["mfg"],
             service=b["svc"],
+            uuid128s=frozenset(b.get("u128_hints") or ()),
+            fingerprint_profile=fp,
         )
         clusters.setdefault(sk, []).append(addr)
 
@@ -333,6 +349,8 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
             name=b["name"],
             manufacturer=b["mfg"],
             service=b["svc"],
+            uuid128s=frozenset(b.get("u128_hints") or ()),
+            fingerprint_profile=fp,
         )
         rollup = SessionAddressRollup(
             address=b["primary_mac"],
@@ -349,6 +367,7 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
             gatt_seen=bool(b["gatt"]),
             smp_seen=bool(b["smp"]),
             encrypted_seen=bool(b["enc"]),
+            uuid128_hints=set(b.get("u128_hints") or ()),
         )
         pat = appearance_pattern(rollup)
         device_guess, _conf0, conn_guess, scan_guess = classify_from_rollup(rollup)
@@ -359,7 +378,7 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
             any_enc=bool(b["enc"]),
             sessions_seen=len(b["sessions"]),
         )
-        has_id = bool(b["name"] or b["mfg"] or b["svc"])
+        has_id = bool(b["name"] or b["mfg"] or b["svc"] or b.get("u128_hints"))
         confidence = confidence_from_evidence(
             packet_count_total=int(b["packets"]),
             sessions_seen=len(b["sessions"]),
@@ -369,9 +388,10 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
 
         merge_note: str | None = None
         if identity_kind == "fingerprint" and len(b["all_macs"]) > 1:
+            key_bits = "name/mfg/service +UUID-128" if fp == "v2" else "name/mfg/service"
             merge_note = (
-                f"Fingerprint identity: merged {len(b['all_macs'])} random BLE addresses "
-                "(same advertised name + manufacturer/service hints; collisions possible)."
+                f"Fingerprint ({fp}): merged {len(b['all_macs'])} random BLE addresses "
+                f"({key_bits} key; collisions possible)."
             )
 
         ledger_id = _next_ledger_id(conn)
@@ -384,8 +404,9 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
               address, address_type, identity_kind, primary_pdu_types, connectable, scannable,
               connection_seen, gatt_seen, smp_seen, encrypted_seen,
               current_name_hint, current_manufacturer_hint, current_service_hint,
-              rssi_min, rssi_max, appearance_pattern, probable_device_class, confidence, notes
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              rssi_min, rssi_max, appearance_pattern, probable_device_class, confidence, notes,
+              fingerprint_profile
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 ledger_id,
@@ -412,6 +433,7 @@ def rebuild_ledger(conn: sqlite3.Connection) -> int:
                 device,
                 confidence,
                 merge_note,
+                fp,
             ),
         )
         inserted += 1
@@ -518,6 +540,7 @@ def apply_classify_to_ledger(conn: sqlite3.Connection) -> int:
             gatt_seen=bool(d["gatt_seen"]),
             smp_seen=bool(d["smp_seen"]),
             encrypted_seen=bool(d["encrypted_seen"]),
+            uuid128_hints=set(),
         )
         device_guess, _, conn_guess, scan_guess = classify_from_rollup(rollup)
         device = refine_device_class_with_history(

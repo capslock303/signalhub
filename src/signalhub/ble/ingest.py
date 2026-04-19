@@ -5,11 +5,12 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from signalhub.ble.decrypt_workflow import upsert_session_crypto_from_observations
 from signalhub.ble.ledger import summarize_session
 from signalhub.ble.parser import observation_flags, row_from_tshark_dict
 from signalhub.ble.tshark import iter_field_rows
 from signalhub.common.io import sha256_file
-from signalhub.db.sqlite import now_epoch
+from signalhub.db.sqlite import init_db, now_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,8 @@ def import_pcap(
     pcap_path = pcap_path.resolve()
     if not pcap_path.is_file():
         raise FileNotFoundError(pcap_path)
+
+    init_db(conn)
 
     session_id = str(uuid.uuid4())
     imported_at = now_epoch()
@@ -66,6 +69,9 @@ def import_pcap(
 
         manufacturer = obs.company_id
         service = obs.uuid16
+        u128 = (obs.uuid128 or "").strip().lower() or None
+        ap_raw = (obs.appearance or "").strip() or None
+        fl_raw = (obs.adv_flags_hex or "").strip() or None
         batch.append(
             (
                 session_id,
@@ -77,6 +83,10 @@ def import_pcap(
                 obs.device_name,
                 manufacturer,
                 service,
+                ap_raw,
+                obs.tx_power_dbm,
+                fl_raw,
+                u128,
                 flags["connection_seen"],
                 flags["gatt_seen"],
                 flags["smp_seen"],
@@ -104,6 +114,10 @@ def import_pcap(
     n_obs = _count_obs(conn, session_id)
     logger.info("Imported session %s (%d observations)", session_id, n_obs)
     summarize_session(conn, session_id)
+    try:
+        upsert_session_crypto_from_observations(conn, session_id)
+    except sqlite3.Error:
+        logger.warning("Could not update ble_session_crypto for session %s", session_id)
     return session_id
 
 
@@ -113,9 +127,10 @@ def _flush_batch(conn: sqlite3.Connection, batch: list[tuple]) -> None:
         INSERT INTO ble_observations(
           session_id, timestamp, address, address_type, pdu_type, rssi,
           name_hint, manufacturer_hint, service_hint,
+          appearance_hint, tx_power_dbm, adv_flags_hex, service_uuid128_hint,
           connection_seen, gatt_seen, smp_seen, encrypted_seen,
           frame_protocols, raw_ref
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         batch,
     )

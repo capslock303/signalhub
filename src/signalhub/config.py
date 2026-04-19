@@ -41,7 +41,15 @@ def _iter_dotenv_paths() -> list[Path]:
     return unique
 
 
-def _apply_env_file(path: Path) -> None:
+def apply_dotenv_path(path: Path, *, override: bool = False) -> bool:
+    """Parse a single ``.env`` file into ``os.environ``.
+
+    When ``override`` is False (default), existing environment variables win.
+    When True, values from this file replace existing keys (useful for a workspace
+    parent ``.env`` next to ``signalhub/`` so Pi settings apply even if cwd varies).
+    """
+    if not path.is_file():
+        return False
     raw = path.read_text(encoding="utf-8", errors="replace")
     if raw.startswith("\ufeff"):
         raw = raw[1:]
@@ -60,8 +68,9 @@ def _apply_env_file(path: Path) -> None:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
             value = value[1:-1]
-        if key not in os.environ:
+        if override or key not in os.environ:
             os.environ[key] = value
+    return True
 
 
 def load_dotenv_files() -> list[Path]:
@@ -69,13 +78,22 @@ def load_dotenv_files() -> list[Path]:
 
     Search order: SIGNALHUB_ENV_FILE, ./.env, parents of cwd, then package tree root .env
     (so e.g. ~/ble/signalhub/.env is picked up when cwd is ~/ble).
+
+    Finally, if the package lives under ``parent/signalhub``, loads ``parent/.env`` with
+    **override** so workspace-level Pi/DB settings win.
     """
     loaded: list[Path] = []
     for path in _iter_dotenv_paths():
         if not path.is_file():
             continue
-        _apply_env_file(path)
+        apply_dotenv_path(path, override=False)
         loaded.append(path)
+    root = _package_root_with_pyproject()
+    if root is not None:
+        parent_env = root.parent / ".env"
+        if parent_env.is_file():
+            apply_dotenv_path(parent_env, override=True)
+            loaded.append(parent_env)
     return loaded
 
 

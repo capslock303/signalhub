@@ -5,6 +5,9 @@ import sqlite3
 from pathlib import Path
 
 from signalhub import __version__ as signalhub_version
+from signalhub.ble import insight_analytics, rf_inferences
+from signalhub.common import sig_lookup
+from signalhub.common.manuf_lookup import vendor_for_mac
 from signalhub.common.textutil import sanitize_ble_display_string
 from signalhub.common.timeutil import epoch_to_iso, utc_day_range_epoch
 
@@ -133,6 +136,36 @@ def render_session_report(conn: sqlite3.Connection, session_id: str) -> str:
         for addr, c in amb:
             lines.append(f"- `{addr}` — {c} observations")
     lines.append("")
+
+    if rf_inferences.has_adv_extension_columns(conn):
+        adv_rows = conn.execute(
+            """
+            SELECT DISTINCT appearance_hint, tx_power_dbm, adv_flags_hex, service_uuid128_hint
+            FROM ble_observations
+            WHERE session_id = ?
+              AND (
+                appearance_hint IS NOT NULL OR tx_power_dbm IS NOT NULL
+                OR adv_flags_hex IS NOT NULL OR service_uuid128_hint IS NOT NULL
+              )
+            LIMIT 30
+            """,
+            (session_id,),
+        ).fetchall()
+        lines += ["## GAP / AD extensions (appearance, TX power, flags, UUID-128)", ""]
+        if not adv_rows:
+            lines.append("_No extended AD fields decoded in this session (or not present on air)._")
+        else:
+            lines.append("| appearance | TX dBm | flags | UUID-128 |")
+            lines.append("|---|---|---|---|")
+            for ar in adv_rows:
+                lines.append(
+                    f"| {_md_cell(str(ar['appearance_hint'] or ''))} | "
+                    f"{ar['tx_power_dbm'] if ar['tx_power_dbm'] is not None else ''} | "
+                    f"{_md_cell(str(ar['adv_flags_hex'] or ''))} | "
+                    f"{_md_cell(str(ar['service_uuid128_hint'] or ''))} |",
+                )
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -772,6 +805,379 @@ def render_assessment_report(conn: sqlite3.Connection, from_date: str, to_date: 
     for b in bullets:
         lines.append(b)
     lines.append("")
+    return "\n".join(lines)
+
+
+def _capture_health_markdown(ch: dict) -> list[str]:
+    lines = [
+        "## Capture health (sessions vs observations)",
+        "",
+        "_Separates **import/session bookkeeping** from **frames whose timestamps fall in the UTC window**. "
+        "Many overlap sessions with almost no rows usually mean micro-captures, clock skew, or a range that "
+        "does not align with where frame timestamps landed._",
+        "",
+        f"- **Overlap sessions** (metadata intersects window): **{ch['overlap_session_count']}**",
+        f"- **Observation rows** with `timestamp` in window: **{ch['observation_rows_in_window']}**",
+        f"- **Distinct addresses** (window): **{ch['distinct_addresses_in_window']}**",
+        f"- **Distinct sessions** contributing ≥1 row in window: **{ch['distinct_sessions_with_obs']}**",
+        f"- **Overlap sessions with 0 rows in window:** **{ch['overlap_sessions_with_zero_obs']}** "
+        f"of {ch['overlap_session_count']}",
+        f"- **Among sessions with data:** median rows/session ≈ **{ch['median_obs_per_session_with_obs']:.1f}**, "
+        f"mean ≈ **{ch['mean_obs_per_session_with_obs']:.1f}**",
+        "",
+    ]
+    if ch.get("health_flags"):
+        lines.append("**Flags:**")
+        for f in ch["health_flags"]:
+            lines.append(f"- `{f}`")
+        lines.append("")
+    return lines
+
+
+def _baseline_compare_markdown(
+    from_date: str,
+    to_date: str,
+    bf: str,
+    bt: str,
+    cur: dict,
+    base: dict,
+    delta: dict,
+) -> list[str]:
+    lines = [
+        "## Baseline comparison (prior UTC window)",
+        "",
+        f"_Current: `{from_date}` → `{to_date}` · Baseline: `{bf}` → `{bt}` (inclusive days)._",
+        "",
+        "| Metric | Baseline | Current | Δ |",
+        "|---|---:|---:|---:|",
+    ]
+
+    def row(label: str, key: str) -> None:
+        b = int(base.get(key) or 0)
+        c = int(cur.get(key) or 0)
+        d = int(delta[key]) if delta and key in delta else c - b
+        lines.append(f"| {label} | {b} | {c} | {d:+d} |")
+
+    row("Overlap sessions", "overlap_session_count")
+    row("Observation rows in window", "observation_rows_in_window")
+    row("Distinct addresses in window", "distinct_addresses_in_window")
+    row("Sessions with ≥1 obs in window", "distinct_sessions_with_obs")
+    row("Overlap sessions with 0 obs in window", "overlap_sessions_with_zero_obs")
+    lines.append("")
+    return lines
+
+
+def _device_window_rows_for_report(
+    conn: sqlite3.Connection,
+    from_date: str,
+    to_date: str,
+    start: float,
+    end: float,
+    *,
+    materialize: bool,
+) -> tuple[list[sqlite3.Row], str]:
+    """Return top window rows and a note about materialization."""
+    note = ""
+    rows: list[sqlite3.Row] = []
+    if materialize:
+        try:
+            insight_analytics.ensure_window_stats_table(conn)
+            n = insight_analytics.refresh_ble_device_window_stats(conn, from_date, to_date, start, end)
+            rows = insight_analytics.top_window_stats_rows(conn, from_date, to_date, limit=22)
+            note = f"_Materialized **{n}** address row(s) into `ble_device_window_stats` for this window._"
+        except sqlite3.Error as e:
+            note = f"_Could not write window stats ({e}); using inline SQL (read-only or DB locked)._"
+            rows = insight_analytics.compute_top_device_window_rows_inline(conn, start, end, limit=22)
+    else:
+        note = "_Read-only / materialize off — temporal metrics computed inline (not stored)._"
+        rows = insight_analytics.compute_top_device_window_rows_inline(conn, start, end, limit=22)
+    return rows, note
+
+
+def render_insights_report(
+    conn: sqlite3.Connection,
+    from_date: str,
+    to_date: str,
+    *,
+    enrich_registry: bool = True,
+    materialize_window_stats: bool = True,
+    baseline_from_date: str | None = None,
+    baseline_to_date: str | None = None,
+) -> str:
+    """Single consolidated narrative: activity, new/returning devices, registry hints, next steps.
+
+    Replaces juggling separate assessment / change / ledger markdowns in the UI; those
+    exports remain available from the CLI for raw tables.
+    """
+    start, end = utc_day_range_epoch(from_date, to_date)
+    lines: list[str] = [
+        "# BLE insights (consolidated)",
+        "",
+        f"> **signalhub `{signalhub_version}`** · UTC window `{from_date}` → `{to_date}` (inclusive days)",
+        "",
+        "_Public vendor names are registry hints (OUI assignment ≠ proof a device is that product). "
+        "BLE advertising can omit or spoof identifiers._",
+        "",
+    ]
+
+    ch = insight_analytics.capture_health_metrics(conn, start, end)
+    lines += _capture_health_markdown(ch)
+
+    baseline_health: dict | None = None
+    delta: dict | None = None
+    if (
+        baseline_from_date
+        and baseline_to_date
+        and baseline_from_date.strip()
+        and baseline_to_date.strip()
+    ):
+        bf, bt = baseline_from_date.strip(), baseline_to_date.strip()
+        try:
+            sb, seb = utc_day_range_epoch(bf, bt)
+            baseline_health = insight_analytics.capture_health_metrics(conn, sb, seb)
+            delta = insight_analytics.baseline_delta(ch, baseline_health)
+            lines += _baseline_compare_markdown(from_date, to_date, bf, bt, ch, baseline_health, delta)
+        except ValueError as e:
+            lines += ["## Baseline comparison", "", f"_Skipped: invalid baseline range ({e})._", ""]
+
+    win_rows, win_note = _device_window_rows_for_report(
+        conn, from_date, to_date, start, end, materialize=materialize_window_stats,
+    )
+    lines += [
+        "## Per-address recurrence (this window)",
+        "",
+        win_note,
+        "",
+        "_**Sess** = distinct capture sessions; **UTC hours** = distinct hour buckets of frame timestamps; "
+        "**Avg gap** ≈ mean seconds between consecutive frames (same address), when computable._",
+        "",
+        "| Address | Rows | Sess | Active UTC hrs | Span (s) | Avg gap (s) | Ledger class | Identity | Vendor (OUI) |",
+        "|---|---:|---:|---:|---:|---:|---|---|---|",
+    ]
+    for r in win_rows:
+        addr = r["address"]
+        dr = conn.execute(
+            """
+            SELECT probable_device_class, identity_kind FROM ble_devices
+            WHERE address = ?
+            ORDER BY (last_seen IS NULL) ASC, last_seen DESC LIMIT 1
+            """,
+            (addr,),
+        ).fetchone()
+        cls = (dr["probable_device_class"] if dr else None) or "—"
+        ik = (dr["identity_kind"] if dr else None) or "—"
+        reg = "—"
+        if enrich_registry:
+            reg = _md_cell(vendor_for_mac(addr, use_http_fallback=True) or "")
+        span = r["span_seconds"]
+        gap = r["avg_inter_obs_seconds"]
+        span_s = f"{float(span):.1f}" if span is not None else "—"
+        gap_s = f"{float(gap):.3f}" if gap is not None else "—"
+        lines.append(
+            f"| `{addr}` | {int(r['obs_rows'] or 0)} | {int(r['distinct_sessions'] or 0)} | "
+            f"{int(r['distinct_utc_hours'] or 0)} | {span_s} | {gap_s} | {cls} | {ik} | {reg or '—'} |",
+        )
+    lines.append("")
+
+    sessions = capture_sessions_rows_for_export(conn, from_date=from_date, to_date=to_date)
+    obs_row = conn.execute(
+        """
+        SELECT COUNT(*) AS n, COUNT(DISTINCT address) AS addr
+        FROM ble_observations
+        WHERE timestamp IS NOT NULL AND timestamp >= ? AND timestamp <= ?
+        """,
+        (start, end),
+    ).fetchone()
+    n_obs = int(obs_row["n"] or 0) if obs_row else 0
+    n_addr = int(obs_row["addr"] or 0) if obs_row else 0
+
+    new_d = list(
+        conn.execute(
+            """
+            SELECT address, ledger_id, first_seen, probable_device_class, current_name_hint
+            FROM ble_devices
+            WHERE first_seen IS NOT NULL AND first_seen >= ? AND first_seen <= ?
+            ORDER BY first_seen
+            LIMIT 40
+            """,
+            (start, end),
+        ),
+    )
+    lines += ["## New to the ledger (first seen in this window)", ""]
+    if new_d:
+        for d in new_d:
+            nm = sanitize_ble_display_string(d["current_name_hint"]) or "—"
+            lines.append(
+                f"- `{d['address']}` — class `{d['probable_device_class'] or '?'}` — name hint `{nm}` — "
+                f"first {epoch_to_iso(d['first_seen'])}",
+            )
+    else:
+        lines.append("_No ledger rows with first_seen inside the window._")
+    lines.append("")
+
+    returning = list(
+        conn.execute(
+            """
+            SELECT address, ledger_id, first_seen, last_seen, probable_device_class
+            FROM ble_devices
+            WHERE first_seen IS NOT NULL AND first_seen < ?
+              AND last_seen IS NOT NULL AND last_seen >= ? AND last_seen <= ?
+            ORDER BY last_seen DESC
+            LIMIT 35
+            """,
+            (start, start, end),
+        ),
+    )
+    lines += [
+        "## Seen again this window (ledger first_seen *before* window, activity inside)",
+        "",
+        "_Useful for “who came back” vs brand-new hardware._",
+        "",
+    ]
+    if returning:
+        for d in returning:
+            lines.append(
+                f"- `{d['address']}` — since {epoch_to_iso(d['first_seen'])} — last {epoch_to_iso(d['last_seen'])} "
+                f"— class `{d['probable_device_class'] or '?'}`",
+            )
+    else:
+        lines.append("_None matched (sparse ledger dates or empty overlap)._")
+    lines.append("")
+
+    lines += [
+        "## Bluetooth SIG hints (company ID & 16-bit service)",
+        "",
+        "_Decoded `manufacturer_hint` / `service_hint` fields cross-checked with the public "
+        "[Bluetooth numbers database](https://github.com/NordicSemiconductor/bluetooth-numbers-database) "
+        "(cached locally). Hints can be absent or ambiguous._",
+        "",
+    ]
+    try:
+        companies = sig_lookup.distinct_company_labels(conn, start, end, limit=28)
+        services = sig_lookup.distinct_service_labels(conn, start, end, limit=28)
+    except (OSError, ValueError, TypeError):
+        companies, services = [], []
+    lines.append("### Company IDs (from advertising manufacturer / company field)")
+    if companies:
+        lines.append("| Raw hint | Resolved company (SIG) | Sample address |")
+        lines.append("|---|---|---|")
+        for raw, resolved, addr in companies:
+            res = resolved or "_(unresolved)_"
+            lines.append(f"| `{_md_cell(raw)}` | {_md_cell(res)} | `{_md_cell(addr or '')}` |")
+    else:
+        lines.append("_No manufacturer/company hints in this window._")
+    lines.append("")
+    lines.append("### 16-bit service UUIDs")
+    if services:
+        lines.append("| Raw hint | Resolved service (GSS) | Sample address |")
+        lines.append("|---|---|---|")
+        for raw, resolved, addr in services:
+            res = resolved or "_(unresolved)_"
+            lines.append(f"| `{_md_cell(raw)}` | {_md_cell(res)} | `{_md_cell(addr or '')}` |")
+    else:
+        lines.append("_No service UUID hints in this window._")
+    lines.append("")
+
+    rf_struct: dict = {}
+    try:
+        rf_lines, rf_struct = rf_inferences.render_rf_inference_markdown(conn, start, end)
+        lines += rf_lines
+    except Exception:
+        lines += [
+            "## RF-derived inferences (heuristic)",
+            "",
+            "_Skipped: RF analytics block failed (partial DB, SQLite build limits, or unexpected data). "
+            "Core insights above remain valid._",
+            "",
+        ]
+
+    interp: list[str] = []
+    if not sessions and n_obs == 0:
+        interp.append(
+            "- **Coverage gap:** no overlapping sessions and no observations in-range — widen dates or confirm the Pi importer.",
+        )
+    elif n_obs and n_addr:
+        ratio = n_obs / max(n_addr, 1)
+        if ratio < 4:
+            interp.append(
+                f"- **Sparse airtime per address** (~{ratio:.1f} rows/address): many quiet advertisers, short captures, "
+                "or MAC rotation — do not read as “low threat” by itself.",
+            )
+        elif ratio > 60:
+            interp.append(
+                f"- **Concentrated traffic** (~{ratio:.0f} rows/address): a few devices dominated the window — "
+                "prioritize those rows for vendor enrichment and session drill-down.",
+            )
+    if new_d and not returning:
+        interp.append(
+            "- **Mostly new ledger IDs** in-window with few “returning” rows — greenfield capture day or ledger rebuild effect.",
+        )
+    if returning and len(new_d) > 0 and len(returning) > len(new_d) * 2:
+        interp.append(
+            "- **Many returning devices** — stable venue population or repeated fixtures vs. transient phones.",
+        )
+    for flag in ch.get("health_flags") or []:
+        if flag == "many_overlap_sessions_with_zero_obs_in_window":
+            interp.append(
+                "- **Capture / window alignment:** many overlap sessions have **zero** observations in this UTC window — "
+                "check whether frame timestamps mostly fall outside the chosen days, or sessions are micro-captures.",
+            )
+        elif flag == "very_few_packets_per_overlap_session":
+            interp.append(
+                "- **Low volume vs session count:** few packets per overlap session — typical of short sniffer clips "
+                "or a date filter that only grazes your capture span.",
+            )
+        elif flag == "low_mean_obs_per_active_session":
+            interp.append(
+                "- **Thin sessions:** low mean rows per session that *do* have data — consider longer runs or "
+                "confirming the importer is attaching observations to the expected `session_id`.",
+            )
+    if rf_struct.get("name_service_mac_clusters"):
+        interp.append(
+            "- **Name/service → multiple MACs** detected — consider privacy-preserving rotation or a fleet of similar devices.",
+        )
+    if rf_struct.get("co_presence_top_pairs"):
+        interp.append(
+            "- **Co-presence pairs** surfaced — validate whether those devices are physically related or only share busy hours.",
+        )
+    ctx_all = rf_struct.get("address_context") or {}
+    if ctx_all.get("distinct_addresses_all_time", 0) > 0 and ctx_all.get("distinct_addresses_in_window", 0) > 0:
+        ratio_all = ctx_all["distinct_addresses_in_window"] / max(ctx_all["distinct_addresses_all_time"], 1)
+        if ratio_all > 0.35:
+            interp.append(
+                "- **Large fraction of your all-time MAC set active in this window** — high churn site or a window that "
+                "matches heavy collection days.",
+            )
+    if not interp:
+        interp.append(
+            "- No strong single-story pattern; use **RF inferences**, **recurrence**, **SIG hints**, and ledger for triage.",
+        )
+    lines += ["## Automated interpretation (conservative)", ""] + interp + [""]
+
+    lines += [
+        "## Next steps (human + tooling)",
+        "",
+        "- Cross-check **capture health** with **Pi Edge hub** (collector/importer healthy?) and longer capture slices.",
+        "- Compare **OUI / company ID / service UUID** columns — disagreement is informative (random MAC, proxy, decode gap).",
+        "- Re-import pcaps after upgrading so **appearance / TX power / UUID-128** columns populate (see RF section).",
+        "- Export raw CSV tables: `signalhub-ble export assessment-tables --from … --to …` for spreadsheets.",
+        "",
+    ]
+
+    win_sample = [insight_analytics.row_to_metric_dict(r) for r in win_rows[:18]]
+    payload = insight_analytics.insights_metrics_json_blob(
+        capture_health=ch,
+        baseline_health=baseline_health,
+        delta=delta,
+        window_rows_sample=win_sample,
+        rf_inference=rf_struct if rf_struct else None,
+    )
+    lines += [
+        "",
+        "<!-- signalhub-insights-json",
+        payload,
+        "-->",
+    ]
     return "\n".join(lines)
 
 

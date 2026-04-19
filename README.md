@@ -28,6 +28,29 @@ If your workspace root is the **parent** of `signalhub`, copy **`examples/worksp
 
 Default DB path is **`./data/db/signalhub.sqlite`** relative to the **current working directory**; the dev scripts set cwd to the parent of `signalhub` so data and `.env` stay at workspace root.
 
+## Windows desktop EXE (local dashboard)
+
+Build a **folder deploy** with PyInstaller. The runnable output is written **next to** the `signalhub/` folder (workspace root), as **`SignalhubDashboard\SignalhubDashboard.exe`** plus **`_internal\`**, not under `signalhub\dist\`. The build script still uses **`signalhub\.venv-desktop-build`** only so your global Python (e.g. ML stacks) is not bundled.
+
+```powershell
+cd signalhub
+pwsh -File .\scripts\build\build_desktop_exe.ps1
+```
+
+From the parent of `signalhub`, run **`SignalhubDashboard\SignalhubDashboard.exe`**. Keep that whole **`SignalhubDashboard`** folder intact. It starts Streamlit and opens a browser to `http://127.0.0.1:8501`. Override the port with `SIGNALHUB_STREAMLIT_PORT` if needed.
+
+The bundle is for the **Streamlit review app** (sidebar database upload, Edge hub SSH status, reports, AI). It does **not** include Wireshark or `tshark`; use the CLI on a machine that has capture tooling when importing `.pcapng` files.
+
+### Parent folder launch (`…/nRF/` with `signalhub/` inside)
+
+If your tree is `parent/signalhub/`, stay in **parent** and either:
+
+- Run **`Start-SignalhubDashboard.ps1`** (prefers **`SignalhubDashboard\SignalhubDashboard.exe`** next to `signalhub`, then legacy `signalhub\dist\...`, else venv / `python -m`), or
+- Build a one-file stub: from **`parent`**, run `pwsh -File scripts/build_start_signalhub_exe.ps1` → **`StartSignalhubDashboard.exe`** next to `signalhub/` (starts the bundled EXE or falls back to dev Python).
+- **Pi redeploy:** from **`parent`**, run `pwsh -File scripts/build_redeploy_to_pi_exe.ps1` → **`RedeploySignalhubToPi.exe`** next to `signalhub/`. Double-click or pass the same args as `redeploy-to-pi.ps1` (e.g. `-NonInteractive`, `-PiHost …`). Still requires **PowerShell** and **OpenSSH** (`scp`/`ssh`) on the PC.
+
+**Pi → PC SQLite sync (dashboard):** Set `SIGNALHUB_PI_HOST`, `SIGNALHUB_PI_USER`, `SIGNALHUB_PI_SSH_IDENTITY` (recommended for non-interactive `scp`), optionally `SIGNALHUB_PI_REMOTE_DB` and `SIGNALHUB_PI_LOCAL_DB_CACHE`, and **`SIGNALHUB_AUTO_SYNC_PI_DB=1`** in **`signalhub/.env`**, **`parent/.env`** (e.g. `nRF/.env`), or — for the frozen EXE — a **`.env` next to `SignalhubDashboard.exe`** (or in its parent folder). On startup the launcher runs `scp` and sets **`SIGNALHUB_REVIEW_DB`** to the cached file. In the app, use **“Sync database from Pi when the app starts”** or **Pull latest DB from Pi now**.
+
 ## Quick start
 
 ```bash

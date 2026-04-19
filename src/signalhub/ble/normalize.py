@@ -9,6 +9,33 @@ import sqlite3
 from signalhub.ble.models import SessionAddressRollup
 
 
+def _row_get(r: sqlite3.Row, key: str) -> object | None:
+    try:
+        return r[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def adv_profile_json_for_rollup(r: SessionAddressRollup) -> str | None:
+    """Compact JSON of non-empty GAP/AD fields aggregated for one address in a session."""
+    if (
+        not r.appearance_hints
+        and not r.adv_flags_hex
+        and not r.uuid128_hints
+        and not r.tx_power_dbm_samples
+    ):
+        return None
+    tx = r.tx_power_dbm_samples
+    obj: dict = {
+        "appearances": sorted(r.appearance_hints),
+        "adv_flags_hex": sorted(r.adv_flags_hex),
+        "uuid128s": sorted(r.uuid128_hints)[:24],
+    }
+    if tx:
+        obj["tx_power_dbm"] = {"min": min(tx), "max": max(tx)}
+    return json.dumps(obj, separators=(",", ":"))
+
+
 def rollup_session(obs_rows: Iterable[sqlite3.Row]) -> dict[str, SessionAddressRollup]:
     by_addr: dict[str, dict] = defaultdict(
         lambda: {
@@ -25,6 +52,10 @@ def rollup_session(obs_rows: Iterable[sqlite3.Row]) -> dict[str, SessionAddressR
             "gatt": False,
             "smp": False,
             "enc": False,
+            "appearance": set(),
+            "flags": set(),
+            "u128": set(),
+            "tx": [],
         },
     )
 
@@ -50,6 +81,21 @@ def rollup_session(obs_rows: Iterable[sqlite3.Row]) -> dict[str, SessionAddressR
             b["mfg"].add(str(r["manufacturer_hint"]))
         if r["service_hint"]:
             b["svc"].add(str(r["service_hint"]))
+        ap = _row_get(r, "appearance_hint")
+        if ap and str(ap).strip():
+            b["appearance"].add(str(ap).strip())
+        fl = _row_get(r, "adv_flags_hex")
+        if fl and str(fl).strip():
+            b["flags"].add(str(fl).strip())
+        u8 = _row_get(r, "service_uuid128_hint")
+        if u8 and str(u8).strip():
+            b["u128"].add(str(u8).strip().lower())
+        txp = _row_get(r, "tx_power_dbm")
+        if txp is not None:
+            try:
+                b["tx"].append(float(txp))
+            except (TypeError, ValueError):
+                pass
         b["connection"] = b["connection"] or bool(r["connection_seen"])
         b["gatt"] = b["gatt"] or bool(r["gatt_seen"])
         b["smp"] = b["smp"] or bool(r["smp_seen"])
@@ -72,6 +118,10 @@ def rollup_session(obs_rows: Iterable[sqlite3.Row]) -> dict[str, SessionAddressR
             gatt_seen=bool(b["gatt"]),
             smp_seen=bool(b["smp"]),
             encrypted_seen=bool(b["enc"]),
+            appearance_hints=set(b["appearance"]),
+            adv_flags_hex=set(b["flags"]),
+            tx_power_dbm_samples=list(b["tx"]),
+            uuid128_hints=set(b["u128"]),
         )
     return out
 

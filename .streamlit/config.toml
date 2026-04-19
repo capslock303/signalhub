@@ -3,3 +3,11 @@ headless = true
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#6c8cff"
+backgroundColor = "#0e0f12"
+secondaryBackgroundColor = "#16181d"
+textColor = "#e8eaed"
+font = "sans serif"

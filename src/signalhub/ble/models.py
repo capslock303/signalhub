@@ -16,6 +16,10 @@ class ObservationRow:
     device_name: str | None = None
     company_id: str | None = None
     uuid16: str | None = None
+    uuid128: str | None = None
+    appearance: str | None = None
+    adv_flags_hex: str | None = None
+    tx_power_dbm: float | None = None
     encrypted_flag: str | None = None
     address_type: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
@@ -37,3 +41,7 @@ class SessionAddressRollup:
     gatt_seen: bool
     smp_seen: bool
     encrypted_seen: bool
+    appearance_hints: set[str] = field(default_factory=set)
+    adv_flags_hex: set[str] = field(default_factory=set)
+    tx_power_dbm_samples: list[float] = field(default_factory=list)
+    uuid128_hints: set[str] = field(default_factory=set)

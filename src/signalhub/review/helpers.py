@@ -36,6 +36,8 @@ def db_capabilities(conn: sqlite3.Connection) -> dict[str, Any]:
         "ble_device_session_summary": table_exists(conn, "ble_device_session_summary"),
         "ble_aliases": table_exists(conn, "ble_aliases"),
         "sensors": table_exists(conn, "sensors"),
+        "sensor_positions": table_exists(conn, "sensor_positions"),
+        "ble_session_crypto": table_exists(conn, "ble_session_crypto"),
         "schema_meta": table_exists(conn, "schema_meta"),
         "has_identity_kind": bool(
             conn.execute(
