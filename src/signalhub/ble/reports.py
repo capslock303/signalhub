@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import csv
+import logging
 import sqlite3
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from signalhub import __version__ as signalhub_version
 from signalhub.ble import insight_analytics, rf_inferences
@@ -1082,7 +1085,8 @@ def render_insights_report(
     try:
         rf_lines, rf_struct = rf_inferences.render_rf_inference_markdown(conn, start, end)
         lines += rf_lines
-    except Exception:
+    except Exception as exc:
+        logger.warning("RF inferences skipped for window %s–%s: %s", from_date, to_date, exc)
         lines += [
             "## RF-derived inferences (heuristic)",
             "",
